@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Pong vs AI / 2P (Accessible Info)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/addons/p5.sound.min.js"></script>
+    <style>
+        /* Basic styling to center the canvas */
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #222; /* Dark background */
+            font-family: sans-serif; /* Use a common sans-serif font */
+            overflow: hidden; /* Prevent scrolling on touch devices */
+        }
+        canvas {
+            display: block;
+            /* border: 1px solid #fff; /* Optional: border for clarity */
+            cursor: pointer; /* Indicate interactivity */
+        }
+    </style>
+</head>
+<body>
+    <script>
+        // === Game States ===
+        const STATE_TITLE_SCREEN = 'STATE_TITLE_SCREEN';
+        const STATE_PLAYING = 'STATE_PLAYING';
+        const STATE_GAME_OVER = 'STATE_GAME_OVER';
+        let gameState;
+
+        // === Game Modes ===
+        const GAME_MODE_AI = 'AI';
+        const GAME_MODE_PVP = 'PVP';
+        let currentGameMode = GAME_MODE_AI;
+
+        // === Win Condition ===
+        const scoreToWin = 3;
+        let gameOverStartTime = null;
+        let winnerInfo = null;
+
+        // === Player Controls ===
+        const P1_UP_KEY = 68; // D
+        const P1_DOWN_KEY = 70; // F
+        const P2_UP_KEY = 38; // Up Arrow
+        const P2_DOWN_KEY = 40; // Down Arrow
+
+        // === Difficulty Settings ===
+        const difficultySettings = {
+            'Normal':   { ballSpeedXMagFactor: 0.0066, ballSpeedYMagFactor: 0.005,  aiSpeedFactor: 0.0066, aiVariation: 0.75,  aiError: 0.35,  aiDeadZoneFactor: 0.0083, aiDrift: 0.3 },
+            'Normal+':  { ballSpeedXMagFactor: 0.01,   ballSpeedYMagFactor: 0.0075, aiSpeedFactor: 0.0086, aiVariation: 1.125, aiError: 0.21,  aiDeadZoneFactor: 0.0041, aiDrift: 0.3 },
+            'Normal++': { ballSpeedXMagFactor: 0.0125, ballSpeedYMagFactor: 0.0091, aiSpeedFactor: 0.012,  aiVariation: 0.075, aiError: 0.035, aiDeadZoneFactor: 0.0016, aiDrift: 0 }
+        };
+        let currentDifficulty = 'Normal';
+
+        // === AI Settings (Operational, now derived from factors) ===
+        let aiBasePaddleSpeed, aiSpeedVariation, aiPredictionError, aiDeadZone, aiDriftSpeedFactor;
+        let aiIsTracking = false, aiPredictedY = null;
+
+        // === Scoring ===
+        let player1Score = 0, player2Score = 0;
+
+        // === Game Variables ===
+        let paddle1X, paddle1Y, playerPaddleSpeed; // Speed will be relative
+        let paddle2X, paddle2Y;
+        let paddleWidth, paddleHeight;
+        let ballX, ballY, ballSize;
+        let ballSpeedX, ballSpeedY;
+        const paddleSmoothingFactor = 0.2;
+
+        // === Mouse Dragging Flags ===
+        let p1MouseIsDragging = false;
+        let p2MouseIsDragging = false;
+
+        // === Ball Trail ===
+        let ballTrail = [];
+        const BALL_TRAIL_LENGTH = 7;
+
+        // === Arena & Style ===
+        let arenaSize; // Will be set dynamically
+        let boundaryThickness;
+        let boundaryColor, scoreColor;
+        let trailAlpha = 30, currentHue = 0, hueShiftSpeed = 1;
+
+        // === Sound Effects ===
+        let osc, envelope, scoreOsc, scoreEnvelope, wallHitOsc, wallHitEnv;
+
+        // === Title Music Components ===
+        let titleMusicOsc, titleMusicEnv, titleMusicPart;
+        let titleMusicPattern; 
+        let titleMusicBPM = 70; 
+        let isTitleMusicPlaying = false;
+
+        // === Bass Thrum Components ===
+        let bassOsc, bassEnv, bassFilter, bassPart;
+        let bassPattern;
+        let isBassPlaying = false;
+
+        // === Title Screen Button Definitions ===
+        let titleButtons = [];
+
+        // === Setup ===
+        function setup() {
+            arenaSize = constrain(windowHeight * 0.9, 300, 690); 
+            if (windowWidth < arenaSize) { 
+                arenaSize = windowWidth * 0.95;
+            }
+            createCanvas(arenaSize, arenaSize);
+            frameRate(60);
+            colorMode(HSB, 360, 100, 100, 100);
+            rectMode(CENTER); ellipseMode(CENTER);
+
+            paddleHeight = height / 6;
+            paddleWidth = width * 0.025; 
+            ballSize = height * 0.02;
+            boundaryThickness = height * 0.008;
+            playerPaddleSpeed = height * 0.008; 
+
+            boundaryColor = color(0, 0, 86);
+            scoreColor = color(0, 0, 100);
+
+            paddle1X = paddleWidth * 1.5; paddle1Y = height / 2;
+            paddle2X = width - (paddleWidth * 1.5); paddle2Y = height / 2;
+            
+            // Sound Effects Setup
+            osc = new p5.Oscillator('sine'); envelope = new p5.Envelope();
+            envelope.setADSR(0.005, 0.05, 0.1, 0.1); envelope.setRange(0.5, 0);
+            osc.amp(envelope); osc.start(); osc.freq(660);
+
+            scoreOsc = new p5.Oscillator('triangle'); scoreEnvelope = new p5.Envelope();
+            scoreEnvelope.setADSR(0.01, 0.1, 0.1, 0.2); scoreEnvelope.setRange(0.4, 0);
+            scoreOsc.amp(scoreEnvelope); scoreOsc.start(); scoreOsc.freq(440);
+
+            wallHitOsc = new p5.Oscillator('square'); wallHitEnv = new p5.Envelope();
+            wallHitEnv.setADSR(0.003, 0.03, 0.05, 0.08); wallHitEnv.setRange(0.3, 0);
+            wallHitOsc.amp(wallHitEnv); wallHitOsc.start(); wallHitOsc.freq(330);
+
+            // Title Music (Melody) Setup
+            titleMusicOsc = new p5.Oscillator('sine'); 
+            titleMusicEnv = new p5.Envelope();
+            titleMusicEnv.setADSR(0.2, 0.3, 0.1, 0.8); 
+            titleMusicEnv.setRange(0.08, 0); 
+            titleMusicOsc.amp(titleMusicEnv);
+            titleMusicOsc.start(); 
+            titleMusicPattern = [
+                ['0:0:0', 60], ['0:2:0', 63], ['1:0:0', 67], ['1:1:8', 65], ['1:2:0', 70],
+                ['2:0:0', 67], ['2:1:0', 71], ['2:2:0', 74], ['2:3:0', 69], ['3:0:0', 72],
+                ['3:1:8', 71], ['3:2:0', 67], ['4:0:0', 62], ['4:1:8', 65], ['4:2:0', 69],
+                ['5:0:0', 65], ['5:1:0', 72], ['5:2:0', 69], ['5:3:0', 62], ['6:0:0', 69],
+                ['6:1:8', 67], ['6:2:0', 72], ['6:3:0', 64], ['7:0:0', 60], ['7:2:0', 57]
+            ];
+            let playScheduledMelodyNote = (scheduledTime, midiNoteToPlay) => {
+                if (midiNoteToPlay !== null && getAudioContext().state === 'running' && titleMusicOsc) {
+                    titleMusicOsc.freq(midiToFreq(midiNoteToPlay), 0.01, scheduledTime); 
+                    titleMusicEnv.play(titleMusicOsc, scheduledTime, 0.35); 
+                }
+            };
+            titleMusicPart = new p5.Part();
+            titleMusicPart.addPhrase('mainMelody', playScheduledMelodyNote, titleMusicPattern);
+            titleMusicPart.setBPM(titleMusicBPM);
+
+            // Bass Thrum Setup
+            bassOsc = new p5.Oscillator('sawtooth'); 
+            bassFilter = new p5.LowPass(); 
+            bassEnv = new p5.Envelope();
+            bassOsc.disconnect(); bassOsc.connect(bassFilter); 
+            bassFilter.freq(100); bassFilter.res(5);    
+            bassEnv.setADSR(0.02, 0.1, 0.6, 0.2); bassEnv.setRange(0.05, 0); 
+            bassOsc.amp(bassEnv); bassOsc.start();
+            bassPattern = [];
+            for (let bar = 0; bar < 8; bar++) { 
+                for (let beat = 0; beat < 4; beat++) { bassPattern.push([`${bar}:${beat}:0`, 36]); }
+            }
+            let playScheduledBassNote = (scheduledTime, midiNoteToPlay) => {
+                if (midiNoteToPlay !== null && getAudioContext().state === 'running' && bassOsc) {
+                    bassOsc.freq(midiToFreq(midiNoteToPlay), 0.01, scheduledTime);
+                    bassEnv.play(bassOsc, scheduledTime, 0.2); 
+                }
+            };
+            bassPart = new p5.Part();
+            bassPart.addPhrase('bassLine', playScheduledBassNote, bassPattern);
+            bassPart.setBPM(titleMusicBPM); 
+            
+            initializeTitleButtons(); 
+            applyDifficultySettings(); 
+            gameState = STATE_TITLE_SCREEN;
+        }
+
+        function initializeTitleButtons() { 
+            titleButtons = [];
+            let buttonWidth = width * 0.7; 
+            let buttonHeight = height * 0.09;
+            let spacing = buttonHeight * 0.3; 
+            let currentY = height * 0.32; 
+            titleButtons.push({ x: width / 2, y: currentY, w: buttonWidth, h: buttonHeight, text: "AI: Normal (N)", keyboardKey: 'N', action: () => { startGame(GAME_MODE_AI, 'Normal'); }});
+            currentY += buttonHeight + spacing;
+            titleButtons.push({ x: width / 2, y: currentY, w: buttonWidth, h: buttonHeight, text: "AI: Normal+ (P)", keyboardKey: 'P', action: () => { startGame(GAME_MODE_AI, 'Normal+'); }});
+            currentY += buttonHeight + spacing;
+            titleButtons.push({ x: width / 2, y: currentY, w: buttonWidth, h: buttonHeight, text: "AI: Normal++ (H)", keyboardKey: 'H', action: () => { startGame(GAME_MODE_AI, 'Normal++'); }});
+            currentY += buttonHeight + spacing * 1.5; 
+            titleButtons.push({ x: width / 2, y: currentY, w: buttonWidth, h: buttonHeight, text: "Player vs Player (S)", keyboardKey: 'S', action: () => { startGame(GAME_MODE_PVP, 'Normal'); }});
+        }
+        
+        function manageTitleMusic() { 
+            if (gameState === STATE_TITLE_SCREEN) {
+                if (getAudioContext().state === 'running') {
+                    if (!isTitleMusicPlaying && titleMusicPart) {
+                        titleMusicPart.loop(); isTitleMusicPlaying = true;
+                    }
+                    if (!isBassPlaying && bassPart) { 
+                        bassPart.loop(); isBassPlaying = true;
+                    }
+                }
+            } else { 
+                if (isTitleMusicPlaying && titleMusicPart) {
+                    titleMusicPart.stop(); isTitleMusicPlaying = false;
+                }
+                if (isBassPlaying && bassPart) { 
+                    bassPart.stop(); isBassPlaying = false;
+                }
+            }
+        }
+
+        function draw() { 
+            switch (gameState) {
+                case STATE_TITLE_SCREEN: drawTitleScreen(); break;
+                case STATE_PLAYING: runGame(); break;
+                case STATE_GAME_OVER: drawGameOverScreen(); break;
+            }
+        }
+
+        function drawTitleScreen() { 
+            manageTitleMusic(); 
+            push(); colorMode(RGB); background(0); fill(255); pop();
+            textAlign(CENTER, CENTER);
+            textSize(height * 0.1); fill(0,0,100); text("PONG", width / 2, height * 0.12); 
+
+            for (let button of titleButtons) { 
+                push();
+                // Add a visual cue for keyboard focus (optional, but good for accessibility)
+                // This example doesn't implement full keyboard focus state for drawn buttons,
+                // but relies on the text indicating the key.
+                if (mouseX > button.x - button.w / 2 && mouseX < button.x + button.w / 2 &&
+                    mouseY > button.y - button.h / 2 && mouseY < button.y + button.h / 2) {
+                    fill(currentHue, 80, 90); // Hover effect
+                } else { fill(0, 0, 70); } // Default button color
+                noStroke(); rect(button.x, button.y, button.w, button.h, 10); 
+                fill(0, 0, 100); textSize(button.h * 0.35); text(button.text, button.x, button.y); 
+                pop();
+            }
+            
+            textSize(height * 0.022); fill(0,0,80); 
+            let yInfo = titleButtons[titleButtons.length -1].y + titleButtons[titleButtons.length -1].h * 0.7 + (height * 0.03); 
+            text("P1: D/F or Tap/Drag Left", width / 2, yInfo);
+            yInfo += height * 0.03; 
+            text("P2 (PVP): Arrows or Tap/Drag Right", width / 2, yInfo);
+            yInfo += height * 0.03;
+            text("Use keyboard (N, P, H, S) to select modes.", width / 2, yInfo); // Reinforce keyboard
+        }
+
+        function runGame() { 
+            manageTitleMusic(); 
+            push(); rectMode(CORNER); fill(0, 0, 0, trailAlpha); rect(0, 0, width, height); pop();
+            noStroke(); fill(boundaryColor);
+            rect(width / 2, boundaryThickness / 2, width, boundaryThickness);
+            rect(width / 2, height - boundaryThickness / 2, width, boundaryThickness);
+            fill(scoreColor); textSize(height * 0.05); textAlign(CENTER, TOP); 
+            let p1Label = "P1"; let p2Label = currentGameMode === GAME_MODE_AI ? "AI" : "P2";
+            text(`${p1Label}: ${player1Score}  -  ${p2Label}: ${player2Score}`, width / 2, boundaryThickness + (height * 0.01));
+
+            currentHue = (currentHue + hueShiftSpeed) % 360;
+            movePaddles(); moveBall(); checkCollisions();
+            noStroke();
+            for (let i = 0; i < ballTrail.length; i++) { 
+                let pos = ballTrail[i];
+                let particleAlpha = map(i, 0, ballTrail.length - 1 , 0, 30);
+                let particleSize = map(i, 0, ballTrail.length - 1, ballSize * 0.05, ballSize * 0.5);
+                fill(currentHue, 80, 90, particleAlpha);
+                ellipse(pos.x, pos.y, particleSize, particleSize);
+            }
+            fill(currentHue, 90, 100); noStroke();
+            rect(paddle1X, paddle1Y, paddleWidth, paddleHeight);
+            rect(paddle2X, paddle2Y, paddleWidth, paddleHeight);
+            ellipse(ballX, ballY, ballSize, ballSize);
+        }
+
+        function drawGameOverScreen() { 
+            manageTitleMusic(); 
+            push();
+            let message = ""; let messageSize = height * 0.09; 
+            if (winnerInfo === 'AI') { 
+                message = "AI WINS! YOU SUCK";
+                let tileSize = width * 0.066; rectMode(CORNER); noStroke(); 
+                let baseFlashHue = (frameCount * 10) % 360;
+                for (let y = 0; y < height; y += tileSize) {
+                    for (let x = 0; x < width; x += tileSize) {
+                        let tileHue = (baseFlashHue + x * 0.5 + y * 0.3) % 360; let tileSat = 90;
+                        let flashCycleSpeed = 8; let tileIndex = floor(x / tileSize) + floor(y / tileSize);
+                        let tileBrightness = ((floor(frameCount / flashCycleSpeed) + tileIndex) % 2 === 0) ? 25 : 75;
+                        fill(tileHue, tileSat, tileBrightness); rect(x, y, tileSize, tileSize);
+                    }
+                }
+            } else { 
+                if (winnerInfo === 'Player 1') { message = "PLAYER 1 WINS!"; }
+                else if (winnerInfo === 'Player 2') { message = "PLAYER 2 WINS!"; }
+                else { message = "YOU'RE WINNER"; }
+                let flashHue = (frameCount * 15) % 360; background(flashHue, 100, 100);
+            }
+            rectMode(CENTER); textAlign(CENTER, CENTER);
+            textSize(messageSize); strokeWeight(height * 0.006); stroke(0, 0, 0); fill(0, 0, 100); 
+            text(message, width / 2, height / 2);
+            pop();
+            if (gameOverStartTime !== null) {
+                let elapsedTime = millis() - gameOverStartTime;
+                if (elapsedTime >= 6000) {
+                    gameState = STATE_TITLE_SCREEN; 
+                    gameOverStartTime = null; winnerInfo = null;
+                }
+            }
+        }
+        
+        // === Start Game Function === (ADDED descriptive console logs)
+        function startGame(mode, difficulty) { 
+            currentGameMode = mode; currentDifficulty = difficulty;
+            applyDifficultySettings();
+            if (getAudioContext().state !== 'running') {
+                userStartAudio(); console.log("Audio Context Started by user interaction.");
+            }
+            if (isTitleMusicPlaying && titleMusicPart) {
+                titleMusicPart.stop(); isTitleMusicPlaying = false;
+            }
+            if (isBassPlaying && bassPart) {
+                bassPart.stop(); isBassPlaying = false;
+            }
+            player1Score = 0; player2Score = 0; currentHue = random(360);
+            if (currentGameMode === GAME_MODE_AI) { aiIsTracking = false; aiPredictedY = null; }
+            winnerInfo = null; resetBall(); gameState = STATE_PLAYING;
+            
+            // Accessibility: Announce game start details to console
+            let gameModeStr = mode === GAME_MODE_AI ? "Player vs AI" : "Player vs Player";
+            let p1Controls = "Player 1 controls: D/F keys or Tap/Drag Left.";
+            let p2Controls = "";
+            if (mode === GAME_MODE_AI) {
+                p2Controls = "AI controls Player 2 paddle.";
+            } else {
+                p2Controls = "Player 2 controls: Arrow keys or Tap/Drag Right.";
+            }
+            console.log(`Game started. Mode: ${gameModeStr}. Difficulty: ${difficulty}. ${p1Controls} ${p2Controls}`);
+        }
+
+        function applyDifficultySettings() { 
+            let baseSettings = difficultySettings[currentDifficulty];
+            if (!baseSettings) { baseSettings = difficultySettings['Normal']; currentDifficulty = 'Normal'; }
+            if (currentGameMode === GAME_MODE_AI) {
+                aiBasePaddleSpeed = height * baseSettings.aiSpeedFactor;
+                aiSpeedVariation = baseSettings.aiVariation; 
+                aiPredictionError = baseSettings.aiError;   
+                aiDeadZone = height * baseSettings.aiDeadZoneFactor; 
+                aiDriftSpeedFactor = baseSettings.aiDrift;
+            }
+        }
+
+        function keyPressed() { 
+            if (gameState === STATE_TITLE_SCREEN) {
+                if (keyCode === 78) { startGame(GAME_MODE_AI, 'Normal'); } // N
+                else if (keyCode === 80) { startGame(GAME_MODE_AI, 'Normal+'); } // P
+                else if (keyCode === 72) { startGame(GAME_MODE_AI, 'Normal++'); } // H
+                else if (keyCode === 83) { startGame(GAME_MODE_PVP, 'Normal'); } // S
+            }
+            if (getAudioContext().state !== 'running') { userStartAudio(); }
+        }
+        
+        function mousePressed() { 
+            if (gameState === STATE_TITLE_SCREEN) {
+                for (let button of titleButtons) {
+                    if (mouseX > button.x - button.w / 2 && mouseX < button.x + button.w / 2 &&
+                        mouseY > button.y - button.h / 2 && mouseY < button.y + button.h / 2) {
+                        button.action(); return;
+                    }
+                }
+            } else if (gameState === STATE_PLAYING) {
+                if (mouseX < width / 2) {
+                    p1MouseIsDragging = true;
+                } else if (mouseX >= width / 2 && currentGameMode === GAME_MODE_PVP) {
+                    p2MouseIsDragging = true;
+                }
+            }
+            if (getAudioContext().state !== 'running') { userStartAudio(); }
+            return false; 
+        }
+
+        function mouseDragged() {
+            if (gameState === STATE_PLAYING && (p1MouseIsDragging || (p2MouseIsDragging && currentGameMode === GAME_MODE_PVP))) {
+                return false; 
+            }
+        }
+
+        function mouseReleased() {
+            p1MouseIsDragging = false;
+            p2MouseIsDragging = false;
+        }
+
+        function movePaddles() { 
+            let p1TargetY = paddle1Y; 
+            let p2TargetY = paddle2Y;
+            let p1PointerActive = false;
+            let p2PointerActive = false;
+
+            if (p1MouseIsDragging) {
+                p1TargetY = mouseY;
+                p1PointerActive = true;
+            } else { 
+                for (let touch of touches) {
+                    if (touch.x < width / 2) {
+                        p1TargetY = touch.y;
+                        p1PointerActive = true;
+                        break; 
+                    }
+                }
+            }
+
+            if (p1PointerActive) {
+                paddle1Y = lerp(paddle1Y, p1TargetY, paddleSmoothingFactor);
+            } else { 
+                if (keyIsDown(P1_UP_KEY)) { paddle1Y -= playerPaddleSpeed; }
+                if (keyIsDown(P1_DOWN_KEY)) { paddle1Y += playerPaddleSpeed; }
+            }
+            paddle1Y = constrain(paddle1Y, paddleHeight / 2, height - paddleHeight / 2);
+
+            if (currentGameMode === GAME_MODE_PVP) {
+                if (p2MouseIsDragging) {
+                    p2TargetY = mouseY;
+                    p2PointerActive = true;
+                } else { 
+                     for (let touch of touches) {
+                        if (touch.x >= width / 2) {
+                            p2TargetY = touch.y;
+                            p2PointerActive = true;
+                            break;
+                        }
+                    }
+                }
+                if (p2PointerActive) {
+                    paddle2Y = lerp(paddle2Y, p2TargetY, paddleSmoothingFactor);
+                } else { 
+                    if (keyIsDown(P2_UP_KEY)) { paddle2Y -= playerPaddleSpeed; }
+                    if (keyIsDown(P2_DOWN_KEY)) { paddle2Y += playerPaddleSpeed; }
+                }
+            } else if (currentGameMode === GAME_MODE_AI) {
+                if (ballSpeedX > 0 && ballX > width * 0.25) {
+                    if (!aiIsTracking) {
+                        aiIsTracking = true; let timeToReach = (paddle2X - ballX) / abs(ballSpeedX); if (timeToReach <= 0) timeToReach = 0.01;
+                        let roughPredictedY = ballY + ballSpeedY * timeToReach; let errorAmount = random(-paddleHeight * aiPredictionError, paddleHeight * aiPredictionError);
+                        aiPredictedY = roughPredictedY + errorAmount; aiPredictedY = constrain(aiPredictedY, paddleHeight * 0.1, height - paddleHeight * 0.1);
+                    }
+                    if (aiPredictedY !== null) {
+                        let diffY = aiPredictedY - paddle2Y;
+                        if (abs(diffY) > aiDeadZone) { 
+                            let moveDir = diffY > 0 ? 1 : -1; 
+                            let currentAiSpeed = aiBasePaddleSpeed + random(-aiBasePaddleSpeed * aiSpeedVariation, aiBasePaddleSpeed * aiSpeedVariation); 
+                            currentAiSpeed = max(height * 0.001, currentAiSpeed); 
+                            paddle2Y += moveDir * currentAiSpeed;
+                        }
+                    }
+                } else {
+                    aiIsTracking = false; aiPredictedY = null;
+                    if (aiDriftSpeedFactor > 0) {
+                        let centerZone = height * 0.025; 
+                        if (paddle2Y < height/2 - centerZone) { paddle2Y += aiBasePaddleSpeed * aiDriftSpeedFactor; }
+                        else if (paddle2Y > height/2 + centerZone) { paddle2Y -= aiBasePaddleSpeed * aiDriftSpeedFactor; }
+                    }
+                }
+            }
+            paddle2Y = constrain(paddle2Y, paddleHeight / 2, height - paddleHeight / 2);
+        }
+        function moveBall() { 
+            ballTrail.unshift({ x: ballX, y: ballY });
+            if (ballTrail.length > BALL_TRAIL_LENGTH) { ballTrail.pop(); }
+            ballX += ballSpeedX; ballY += ballSpeedY;
+        }
+        
+        // === Check Collisions === (ADDED descriptive console logs for score and game over)
+        function checkCollisions() { 
+            if (ballY - ballSize / 2 < 0 || ballY + ballSize / 2 > height) {
+                ballSpeedY *= -1; ballY = constrain(ballY, ballSize / 2, height - ballSize / 2);
+                wallHitEnv.play(wallHitOsc);
+            }
+            let hitPaddle = false;
+            if (ballSpeedX < 0 && ballX - ballSize / 2 <= paddle1X + paddleWidth / 2 && ballX - ballSize / 2 > paddle1X - paddleWidth / 2) {
+                if (ballY + ballSize / 2 >= paddle1Y - paddleHeight / 2 && ballY - ballSize / 2 <= paddle1Y + paddleHeight / 2) {
+                    ballSpeedX *= -1; ballX = paddle1X + paddleWidth / 2 + ballSize / 2; hitPaddle = true;
+                }
+            }
+            if (!hitPaddle && ballSpeedX > 0 && ballX + ballSize / 2 >= paddle2X - paddleWidth / 2 && ballX + ballSize / 2 < paddle2X + paddleWidth / 2) {
+                if (ballY + ballSize / 2 >= paddle2Y - paddleHeight / 2 && ballY - ballSize / 2 <= paddle2Y + paddleHeight / 2) {
+                    ballSpeedX *= -1; ballX = paddle2X - paddleWidth / 2 - ballSize / 2; hitPaddle = true;
+                    if (currentGameMode === GAME_MODE_AI) { aiIsTracking = false; aiPredictedY = null; }
+                }
+            }
+            if (hitPaddle) { osc.freq(random(600, 700)); envelope.play(osc); }
+            
+            let scored = false; 
+            let scorer = ""; // To hold who scored for the console log
+            let opponent = "";
+
+            if (ballX - ballSize / 2 < 0) { // Player 2 (or AI) scores
+                player2Score++; scored = true;
+                scorer = (currentGameMode === GAME_MODE_AI) ? "AI" : "Player 2";
+                opponent = "Player 1";
+                if (player2Score >= scoreToWin) winnerInfo = scorer;
+            } else if (ballX + ballSize / 2 > width) { // Player 1 scores
+                player1Score++; scored = true;
+                scorer = "Player 1";
+                opponent = (currentGameMode === GAME_MODE_AI) ? "AI" : "Player 2";
+                if (player1Score >= scoreToWin) winnerInfo = scorer;
+            }
+
+            if (scored) {
+                scoreEnvelope.play(scoreOsc);
+                console.log(`${scorer} scores! Score: Player 1 ${player1Score} - ${currentGameMode === GAME_MODE_AI ? "AI" : "Player 2"} ${player2Score}.`);
+
+                if (winnerInfo) {
+                    console.log(`Game Over! Winner: ${winnerInfo}. Final Score: Player 1 ${player1Score} - ${currentGameMode === GAME_MODE_AI ? "AI" : "Player 2"} ${player2Score}.`);
+                    gameState = STATE_GAME_OVER;
+                    gameOverStartTime = millis(); 
+                    return;
+                } else {
+                    resetBall();
+                    if (currentGameMode === GAME_MODE_AI) { aiIsTracking = false; aiPredictedY = null; }
+                }
+            }
+        }
+        function resetBall() { 
+            ballX = width / 2; ballY = height / 2; ballTrail = [];
+            let baseSettings = difficultySettings[currentDifficulty];
+            if (!baseSettings) baseSettings = difficultySettings['Normal'];
+            let speedMagnitudeX = height * baseSettings.ballSpeedXMagFactor;
+            let speedMagnitudeYMax = height * baseSettings.ballSpeedYMagFactor;
+            ballSpeedX = (random() < 0.5 ? 1 : -1) * speedMagnitudeX;
+            ballSpeedY = random(-speedMagnitudeYMax, speedMagnitudeYMax);
+            if (abs(ballSpeedY) < speedMagnitudeYMax * 0.2) {
+                ballSpeedY = (random() < 0.5 ? 1 : -1) * speedMagnitudeYMax * random(0.3, 0.6);
+            }
+        }
+
+        function touchMoved() { 
+            if (gameState === STATE_PLAYING && (p1MouseIsDragging || (p2MouseIsDragging && currentGameMode === GAME_MODE_PVP))) {
+                return false;
+            }
+        }
+        function touchStarted() { 
+            if (gameState === STATE_TITLE_SCREEN) { mousePressed(); } 
+            if (getAudioContext().state !== 'running') { userStartAudio(); }
+            if (gameState === STATE_PLAYING) return false; 
+        }
+        function touchEnded() { 
+             if (gameState === STATE_PLAYING) return false;
+        }
+    </script>
+</body>
+</html>
