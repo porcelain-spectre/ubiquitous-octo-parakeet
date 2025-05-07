@@ -1,0 +1,265 @@
+import random
+
+# --- 1. Define Amino Acids and their Properties ---
+# Simplified properties. Real properties are much more nuanced.
+AMINO_ACIDS_PROPERTIES = {
+    'A': {'name': 'Alanine', 'type': 'hydrophobic', 'charge': 'neutral'},
+    'R': {'name': 'Arginine', 'type': 'hydrophilic', 'charge': 'positive'},
+    'N': {'name': 'Asparagine', 'type': 'hydrophilic', 'charge': 'neutral'},
+    'D': {'name': 'Aspartic Acid', 'type': 'hydrophilic', 'charge': 'negative'},
+    'C': {'name': 'Cysteine', 'type': 'special', 'charge': 'neutral'}, # Can form disulfide bonds
+    'E': {'name': 'Glutamic Acid', 'type': 'hydrophilic', 'charge': 'negative'},
+    'Q': {'name': 'Glutamine', 'type': 'hydrophilic', 'charge': 'neutral'},
+    'G': {'name': 'Glycine', 'type': 'special', 'charge': 'neutral'}, # Flexible
+    'H': {'name': 'Histidine', 'type': 'hydrophilic', 'charge': 'positive_or_neutral'}, # pH-dependent
+    'I': {'name': 'Isoleucine', 'type': 'hydrophobic', 'charge': 'neutral'},
+    'L': {'name': 'Leucine', 'type': 'hydrophobic', 'charge': 'neutral'},
+    'K': {'name': 'Lysine', 'type': 'hydrophilic', 'charge': 'positive'},
+    'M': {'name': 'Methionine', 'type': 'hydrophobic', 'charge': 'neutral'}, # Start codon
+    'F': {'name': 'Phenylalanine', 'type': 'hydrophobic', 'charge': 'neutral'},
+    'P': {'name': 'Proline', 'type': 'special', 'charge': 'neutral'}, # Rigid, helix breaker
+    'S': {'name': 'Serine', 'type': 'hydrophilic', 'charge': 'neutral'},
+    'T': {'name': 'Threonine', 'type': 'hydrophilic', 'charge': 'neutral'},
+    'W': {'name': 'Tryptophan', 'type': 'hydrophobic', 'charge': 'neutral'},
+    'Y': {'name': 'Tyrosine', 'type': 'hydrophilic', 'charge': 'neutral'}, # Hydrophobic tendencies too
+    'V': {'name': 'Valine', 'type': 'hydrophobic', 'charge': 'neutral'},
+}
+
+AMINO_ACID_CODES = list(AMINO_ACIDS_PROPERTIES.keys())
+
+# --- 2. Peptide Class ---
+class Peptide:
+    """
+    Represents a peptide (a short protein sequence) and methods to evaluate it.
+    """
+    def __init__(self, sequence):
+        """
+        Initializes a Peptide object.
+        Args:
+            sequence (str or list): A string or list of single-letter amino acid codes.
+        """
+        if isinstance(sequence, list):
+            self.sequence = "".join(sequence)
+        else:
+            self.sequence = sequence
+        self.length = len(self.sequence)
+
+    def __str__(self):
+        return self.sequence
+
+    def get_composition(self):
+        """Calculates the count of each amino acid type."""
+        composition = {'hydrophobic': 0, 'hydrophilic': 0, 'positive': 0, 'negative': 0, 'neutral_charge':0, 'special': 0}
+        for aa_code in self.sequence:
+            if aa_code in AMINO_ACIDS_PROPERTIES:
+                props = AMINO_ACIDS_PROPERTIES[aa_code]
+
+                # Type classification
+                if props['type'] == 'hydrophobic':
+                    composition['hydrophobic'] += 1
+                elif props['type'] == 'hydrophilic':
+                    composition['hydrophilic'] += 1
+                elif props['type'] == 'special': # Count specials separately
+                    composition['special'] +=1
+
+                # Charge classification
+                if props['charge'] == 'positive':
+                    composition['positive'] += 1
+                elif props['charge'] == 'negative':
+                    composition['negative'] += 1
+                elif props['charge'] == 'neutral' or props['charge'] == 'positive_or_neutral': # Histidine can be neutral
+                    composition['neutral_charge'] +=1
+            else:
+                print(f"Warning: Unknown amino acid code '{aa_code}' in sequence.")
+        return composition
+
+    def contains_motif(self, motif_sequence):
+        """
+        Checks if the peptide contains a specific amino acid motif.
+        Args:
+            motif_sequence (str): The motif to search for (e.g., "G-A-T" or "GAT").
+        """
+        return motif_sequence.replace("-", "") in self.sequence
+
+    def evaluate_fitness(self, target_motif=None, composition_constraints=None):
+        """
+        Evaluates the fitness of the peptide based on desired criteria.
+        A simple scoring system: +1 for each met criterion.
+        Args:
+            target_motif (str, optional): The desired amino acid motif.
+            composition_constraints (dict, optional): A dictionary specifying desired
+                                                     composition percentages.
+                Example: {'hydrophobic': (0.3, 0.5), 'positive': (0.1, 0.2)}
+                         means 30-50% hydrophobic and 10-20% positively charged.
+        Returns:
+            int: The fitness score.
+        """
+        score = 0
+
+        # 1. Motif presence
+        if target_motif:
+            if self.contains_motif(target_motif):
+                score += 1
+            else: # Penalize heavily if essential motif is missing
+                return -100 # Or some other way to indicate failure
+
+        # 2. Composition constraints
+        if composition_constraints:
+            actual_composition_counts = self.get_composition()
+            met_all_composition_constraints = True
+            for prop_type, (min_ratio, max_ratio) in composition_constraints.items():
+                count = 0
+                if prop_type == 'hydrophobic':
+                    count = actual_composition_counts['hydrophobic']
+                elif prop_type == 'hydrophilic':
+                    count = actual_composition_counts['hydrophilic']
+                elif prop_type == 'positive':
+                    count = actual_composition_counts['positive']
+                elif prop_type == 'negative':
+                    count = actual_composition_counts['negative']
+                elif prop_type == 'special':
+                    count = actual_composition_counts['special']
+                # Add other property types if needed
+
+                actual_ratio = count / self.length if self.length > 0 else 0
+
+                if not (min_ratio <= actual_ratio <= max_ratio):
+                    met_all_composition_constraints = False
+                    break # No need to check further if one constraint fails
+
+            if met_all_composition_constraints:
+                score += 1 # Add a point if all composition constraints are met
+            # Could also add partial scores for getting close
+
+        return score
+
+# --- 3. Peptide Generator ---
+class PeptideGenerator:
+    """
+    Generates peptide sequences and tries to optimize them for given criteria.
+    """
+    def __init__(self, length, target_motif=None, composition_constraints=None):
+        """
+        Args:
+            length (int): The desired length of the peptides.
+            target_motif (str, optional): The target amino acid motif.
+            composition_constraints (dict, optional): Constraints for amino acid composition.
+        """
+        self.length = length
+        self.target_motif = target_motif
+        self.composition_constraints = composition_constraints
+        if self.target_motif and len(self.target_motif.replace("-","")) > self.length:
+            raise ValueError("Motif length cannot exceed peptide length.")
+
+    def generate_random_peptide_sequence(self):
+        """Generates a random peptide sequence of the specified length."""
+        return [random.choice(AMINO_ACID_CODES) for _ in range(self.length)]
+
+    def design_peptide_simple(self, num_candidates=1000):
+        """
+        Generates a number of random peptides and returns the one with the best fitness score.
+        This is a very basic "design" strategy (generate and test).
+        Args:
+            num_candidates (int): The number of random peptides to generate and evaluate.
+        Returns:
+            Peptide or None: The best peptide found, or None if no suitable peptide is found.
+        """
+        best_peptide = None
+        highest_score = -float('inf') # Initialize with a very low score
+
+        print(f"\nGenerating and evaluating {num_candidates} candidate peptides of length {self.length}...")
+
+        for i in range(num_candidates):
+            random_sequence_list = self.generate_random_peptide_sequence()
+
+            # If a motif is required, we can try to intelligently insert it
+            # For simplicity here, we'll just rely on random generation and selection,
+            # but a more advanced generator might try to place the motif.
+
+            candidate_peptide = Peptide(random_sequence_list)
+            current_score = candidate_peptide.evaluate_fitness(
+                self.target_motif,
+                self.composition_constraints
+            )
+
+            if current_score > highest_score:
+                highest_score = current_score
+                best_peptide = candidate_peptide
+
+            if (i + 1) % (num_candidates // 10) == 0: # Print progress
+                 print(f"  ...evaluated {i+1}/{num_candidates} candidates. Current best score: {highest_score}")
+
+
+        if best_peptide:
+            print(f"\nBest peptide found with score {highest_score}:")
+            print(f"  Sequence: {best_peptide.sequence}")
+            comp = best_peptide.get_composition()
+            print(f"  Composition: Hydrophobic: {comp['hydrophobic']/best_peptide.length:.2f}, "
+                  f"Hydrophilic: {comp['hydrophilic']/best_peptide.length:.2f}, "
+                  f"Positive: {comp['positive']/best_peptide.length:.2f}, "
+                  f"Negative: {comp['negative']/best_peptide.length:.2f}")
+            if self.target_motif:
+                print(f"  Contains motif '{self.target_motif}': {best_peptide.contains_motif(self.target_motif)}")
+        else:
+            print("\nNo suitable peptide found with the given criteria and number of candidates.")
+
+        return best_peptide
+
+# --- 4. Example Usage ---
+if __name__ == "__main__":
+    print("--- Conceptual Protein Designer ---")
+
+    # --- Define Design Parameters ---
+    peptide_length = 20  # Desired length of the peptide
+
+    # Desired function proxy 1: Presence of a specific motif
+    # Example: A catalytic motif "G-H-S" (Glycine-Histidine-Serine)
+    # Motifs are often non-contiguous in 3D space but contiguous in this simplified 1D model.
+    target_sequence_motif = "GHS"
+
+    # Desired function proxy 2: Specific amino acid composition
+    # Example: We want a peptide that is somewhat soluble and has some charged residues.
+    # (min_ratio, max_ratio)
+    target_composition = {
+        'hydrophobic': (0.2, 0.4),   # 20-40% hydrophobic residues
+        'hydrophilic': (0.4, 0.7),   # 40-70% hydrophilic residues
+        'positive': (0.1, 0.3),      # 10-30% positively charged residues
+        'negative': (0.05, 0.2)      # 5-20% negatively charged residues
+    }
+
+    # --- Create a Generator ---
+    # Initialize the generator with the design parameters.
+    # If a parameter is not needed, it can be set to None.
+    generator = PeptideGenerator(
+        length=peptide_length,
+        target_motif=target_sequence_motif,
+        composition_constraints=target_composition
+    )
+
+    # --- Design the Peptide ---
+    # Generate a number of candidates and select the best one.
+    # Increasing num_candidates increases the chance of finding a good match
+    # but also increases computation time.
+    designed_peptide = generator.design_peptide_simple(num_candidates=50000)
+
+    if designed_peptide:
+        print("\n--- Design Summary ---")
+        print(f"Target Length: {peptide_length}")
+        if target_sequence_motif:
+            print(f"Target Motif: '{target_sequence_motif}'")
+        if target_composition:
+            print("Target Composition Constraints:")
+            for prop, (min_r, max_r) in target_composition.items():
+                print(f"  - {prop.capitalize()}: {min_r*100:.0f}% - {max_r*100:.0f}%")
+
+        print("\n--- Result ---")
+        print(f"Designed Peptide Sequence: {designed_peptide.sequence}")
+        final_score = designed_peptide.evaluate_fitness(target_sequence_motif, target_composition)
+        print(f"Final Fitness Score: {final_score}")
+        # Further analysis could be done here (e.g., full composition printout)
+    else:
+        print("\nFailed to design a peptide meeting all criteria with the given attempts.")
+        print("Consider relaxing constraints, increasing peptide length, or increasing num_candidates.")
+
+    print("\nNote: This is a highly simplified conceptual model for protein design.")
+    print("Real protein design involves 3D structure, energy functions, and experimental validation.")
